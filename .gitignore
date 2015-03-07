@@ -2,3 +2,91 @@
 *.swp
 repo
 .import-*
+
+# Python common .gitignore
+
+.ipynb_checkpoints
+
+# generated data
+*.mallet
+*.mallet.gz
+*.dict
+*.dict.gz
+*.index
+*.index.gz
+
+# generated models
+*.lda*
+*.lsi*
+*.npy
+
+src/grammars/
+
+# custom test dir
+tests/test_data/test_git/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+
+# Mr Developer
+.mr.developer.cfg
+.project
+.pydevproject
+
+# Rope
+.ropeproject
+
+# Django stuff:
+*.log
+*.pot
+
+# Sphinx documentation
+docs/_build/
+
+
+# Latex
+*.aux
+*.log
+*.out
+*.toc
+*.bbl
+*.blg
+*.pdf
+
+*.swp
