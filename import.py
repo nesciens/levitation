@@ -1,28 +1,26 @@
-#!/usr/bin/env python2
-
-
-# Hi, and welcome to the code.
-# This is currently PoC quality, and I'm no Python God either.
-# Patches are encouraged, fork me on GitHub.
-
+#!/usr/bin/env python3
 
 import xml.dom.minidom
 from calendar import timegm
-import codecs
 import datetime
 import os
+import os.path
 import re
 import socket
 import struct
+import codecs
 import sys
 import time
-import urlparse
+import urllib.parse
+import ipaddress
+import pickle
 from optparse import OptionParser
 
 # The encoding for input, output and internal representation. Leave alone.
 ENCODING = 'UTF-8'
 # The XML namespace we support.
 XMLNS = 'http://www.mediawiki.org/xml/export-0.10/'
+MAX_INT64 = 0xFFFFFFFFFFFFFFFF
 
 
 def tzoffset():
@@ -40,6 +38,16 @@ def tzoffsetorzero():
 
     return r
 
+def asciiize_char(s):
+    r = ''
+    for x in s.group(0):
+        r += '%' + codecs.encode(bytearray(x, ENCODING), 'hex').decode(ENCODING).upper()
+
+    return r
+
+
+def asciiize(s):
+    return re.sub('[^A-Za-z0-9_ ()-]', asciiize_char, s)
 
 def singletext(node):
     if len(node.childNodes) == 0:
@@ -54,18 +62,6 @@ def singletext(node):
     return node.childNodes[0].data
 
 
-def asciiize_char(s):
-    r = ''
-    for x in s.group(0):
-        r += '.' + x.encode('hex').upper()
-
-    return r
-
-
-def asciiize(s):
-    return re.sub('[^A-Za-z0-9_ ()-]', asciiize_char, s)
-
-
 def out(text):
     sys.stdout.write(text)
 
@@ -77,9 +73,10 @@ def progress(text):
 
 class Meta:
     def __init__(self, file):
-        self.struct = struct.Struct('LLLLB')
-        self.maxrev = -1
-        self.fh = open(file, 'wb+')
+        self.struct = struct.Struct('LLLQQB')
+        self.rev_struct = struct.Struct('Q')
+        self.fh = open(file, 'ab+')
+
         self.domain = 'unknown.invalid'
         self.nstoid = self.idtons = {}
 
@@ -98,26 +95,32 @@ class Meta:
             rev,
             timegm(time.utctimetuple()),
             page,
-            author.id,
+            (author.id >> 64) & MAX_INT64,
+            author.id & MAX_INT64,
             flags
             )
 
         self.fh.seek(rev * self.struct.size)
         self.fh.write(data)
 
-        if self.maxrev < rev:
-            self.maxrev = rev
-
     def read(self, rev):
         self.fh.seek(rev * self.struct.size)
         data = self.fh.read(self.struct.size)
+
+        if len(data) < self.struct.size:
+            return None
+
         tuple = self.struct.unpack(data)
+
+        a, b = tuple[3], tuple[4]
+        uid = (a << 64) | b
+
         d = {
             'rev':    tuple[0],
             'epoch':  tuple[1],
             'time':   datetime.datetime.utcfromtimestamp(tuple[1]),
             'page':   tuple[2],
-            'user':   tuple[3],
+            'user':   uid,
             'minor':  False,
             'isip':   False,
             'isdel':  False,
@@ -129,14 +132,14 @@ class Meta:
             d['exists'] = False
 
         d['day'] = d['time'].strftime('%Y-%m-%d')
-        flags = tuple[4]
+        flags = tuple[5]
 
         if flags & 1:
             d['minor'] = True
 
         if flags & 2:
             d['isip'] = True
-            d['user'] = socket.inet_ntoa(struct.pack('!I', tuple[3]))
+            d['user'] = str(ipaddress.ip_address(uid))
 
         if flags & 4:
             d['isdel'] = True
@@ -146,16 +149,18 @@ class Meta:
 
 class StringStore:
     def __init__(self, file):
-        self.struct = struct.Struct('Bb255s')
+        self.struct = struct.Struct('QL255s')
         self.maxid = -1
-        self.fh = open(file, 'wb+')
+        self.fh = open(file, 'ab+')
 
     def write(self, id, text, flags = 1):
         if len(text) > 255:
             progress('warning: trimming %s bytes long text: 0x%s' % (len(text), text.encode('hex')))
-            text = text[0:255].decode(ENCODING, 'ignore').encode(ENCODING)
+            text = text[0:255]
 
-        data = self.struct.pack(len(text), flags, text)
+        ba = bytearray(text, ENCODING)
+        data = self.struct.pack(len(ba), flags, ba)
+
         self.fh.seek(id * self.struct.size)
         self.fh.write(data)
 
@@ -175,7 +180,7 @@ class StringStore:
             d = {
                 'len':   data[0],
                 'flags': data[1],
-                'text':  data[2][0:data[0]]
+                'text':  data[2][0:data[0]].decode(ENCODING)
                 }
 
         return d
@@ -195,17 +200,12 @@ class User:
                 continue
 
             if lv1.tagName == 'username':
-                self.name = singletext(lv1).encode(ENCODING)
+                self.name = singletext(lv1)
             elif lv1.tagName == 'id':
                 self.id = int(singletext(lv1))
             elif lv1.tagName == 'ip':
-                # FIXME: This is so not-v6-compatible it hurts.
                 self.isip = True
-                try:
-                    self.id = struct.unpack('!I', socket.inet_aton(singletext(lv1)))[0]
-                except (socket.error, UnicodeEncodeError):
-                    # IP could not be parsed. Leave ID as -1 then.
-                    pass
+                self.id = int(ipaddress.ip_address(singletext(lv1)))
 
         if not (self.isip or self.isdel):
             meta['user'].write(self.id, self.name)
@@ -241,11 +241,12 @@ class Revision:
         self.meta['meta'].write(self.id, self.timestamp, self.page, self.user, self.minor)
 
         if self.comment:
-            self.meta['comm'].write(self.id, self.comment.encode(ENCODING))
+            self.meta['comm'].write(self.id, self.comment)
 
-        mydata = self.text.encode(ENCODING)
-        out('blob\nmark :%d\ndata %d\n' % (self.id + 1, len(mydata)))
-        out(mydata + '\n')
+        fmt = 'blob\nmark :{0}\ndata {1}\n'
+        datalen = len(bytearray(self.text, ENCODING))
+        out(fmt.format(self.id, datalen))
+        out(self.text + '\n')
 
 
 class Page:
@@ -283,7 +284,7 @@ class XMLError(ValueError):
     pass
 
 
-class CancelException(StandardError):
+class CancelException(Exception):
     pass
 
 
@@ -293,7 +294,7 @@ class ParserHandler:
 
     def attrSplit(self, attrs):
         r = {}
-        for k, v in attrs.iteritems():
+        for k, v in attrs.items():
             nk = self.nsSplit(k)
             r[nk] = v
 
@@ -387,7 +388,7 @@ class BlobWriter:
         if self.dom:
             self.finishText()
             self.currentnode = self.currentnode.appendChild(self.dom.createElementNS(name[0], name[1]))
-            for k, v in attrs.iteritems():
+            for k, v in attrs.items():
                 self.currentnode.setAttributeNS(k[0], k[1], v)
 
         # Run the handler and add the sub-handler to the handler stack.
@@ -461,7 +462,7 @@ class BlobWriter:
 
     def in_base(self, name, attrs):
         if attrs == False:
-            self.meta['meta'].domain = urlparse.urlparse(singletext(self.captureGet())).hostname.encode(ENCODING)
+            self.meta['meta'].domain = urllib.parse.urlparse(singletext(self.captureGet())).hostname
 
     def in_namespaces(self, name, attrs):
         if name[1] == 'namespace':
@@ -471,7 +472,7 @@ class BlobWriter:
 
     def in_namespace(self, name, attrs):
         if attrs == False:
-            v = singletext(self.captureGet()).encode(ENCODING)
+            v = singletext(self.captureGet())
             self.meta['meta'].idtons[self.nskey] = v
             self.meta['meta'].nstoid[v] = self.nskey
 
@@ -497,7 +498,7 @@ class BlobWriter:
 
     def in_title(self, name, attrs):
         if attrs == False:
-            self.page.setTitle(singletext(self.captureGet()).encode(ENCODING))
+            self.page.setTitle(singletext(self.captureGet()))
             progress('   ' + self.page.fulltitle)
 
     def in_page_id(self, name, attrs):
@@ -518,22 +519,25 @@ class Committer:
     def work(self):
         rev = commit = 1
         day = ''
-        while rev <= self.meta['meta'].maxrev:
-            meta = self.meta['meta'].read(rev)
-            rev += 1
+        meta = self.meta['meta'].read(rev)
+
+        while meta:
             if not meta['exists']:
                 continue
 
             page = self.meta['page'].read(meta['page'])
             comm = self.meta['comm'].read(meta['rev'])
-            namespace = asciiize('%d-%s' % (page['flags'], self.meta['meta'].idtons[page['flags']]))
-            title = page['text']
+            namespace = asciiize('%d-%s' % (
+                page['flags'],
+                self.meta['meta'].idtons[page['flags']]
+                ))
+            title = os.path.normpath(asciiize(page['text']))
             subdirtitle = ''
 
             for i in range(0, min(self.meta['options'].DEEPNESS, len(title))):
-                subdirtitle += asciiize(title[i]) + '/'
+                subdirtitle += title[i] + '/'
 
-            subdirtitle += asciiize(title)
+            subdirtitle += title
             filename = namespace + '/' + subdirtitle + '.mediawiki'
 
             if meta['minor']:
@@ -544,6 +548,11 @@ class Committer:
             msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (meta['page'], meta['rev'], minor)
 
             if commit == 1:
+                commit = max(
+                            self.meta['page'].maxid,
+                            self.meta['comm'].maxid,
+                            self.meta['user'].maxid
+                        )
                 fromline = ''
             else:
                 fromline = 'from :%d\n' % (commit - 1)
@@ -577,12 +586,14 @@ class Committer:
                 'mark :%d\n' % commit +
                 'author %s <%s@git.%s> %d +0000\n' % (author, authoruid, self.meta['meta'].domain, meta['epoch']) +
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
-                'data %d\n%s\n' % (len(msg), msg) +
+                'data %d\n%s\n' % (len(bytearray(msg, ENCODING)), msg) +
                 fromline +
-                'M 100644 :%d %s\n' % (meta['rev'] + 1, filename)
+                'M 100644 :%d %s\n' % (meta['rev'], filename)
                 )
 
+            rev += 1
             commit += 1
+            meta = self.meta['meta'].read(rev)
 
 
 class LevitationImport:
@@ -603,6 +614,12 @@ class LevitationImport:
             parser = ExpatHandler
             progress('Using Expat parser.')
 
+        if options.OVERWRITE:
+            # clear the info files
+            for each in ['meta.pkl', options.METAFILE, options.COMMFILE, options.USERFILE, options.PAGEFILE]:
+                with open(each, 'wb+') as f:
+                    f.write('')
+
         meta = {
             'options': options,
             'meta': Meta(options.METAFILE),
@@ -611,10 +628,23 @@ class LevitationImport:
             'page': StringStore(options.PAGEFILE),
             }
 
-        progress('Step 1: Creating blobs.')
-        BlobWriter(meta).parse(parser)
-        progress('Step 2: Writing commits.')
-        Committer(meta).work()
+        try:
+            with open('meta.pkl', 'rb') as f:
+                idtons = pickle.load(f)
+            meta['meta'].idtons = idtons
+            meta['meta'].nstoid = dict( (v,k) for k,v in idtons.items() )
+        except (FileNotFoundError, EOFError):
+            pass
+
+        if options.ONLYBLOB:
+            progress('Step 1: Creating blobs.')
+            BlobWriter(meta).parse(parser)
+            with open('meta.pkl', 'wb') as f:
+                pickle.dump(meta['meta'].idtons, f)
+        else:
+            progress('Step 2: Writing commits.')
+            Committer(meta).work()
+
 
     def parse_args(self, args):
         usage = 'Usage: git init --bare repo && bzcat pages-meta-history.xml.bz2 | \\\n' \
@@ -623,35 +653,52 @@ class LevitationImport:
         parser.add_option("-m", "--max", dest="IMPORT_MAX", metavar="IMPORT_MAX",
                 help="Specify the maxium pages to import, -1 for all (default: 100)",
                 default=100, type="int")
+
         parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="DEEPNESS",
                 help="Specify the deepness of the result directory structure (default: 3)",
                 default=3, type="int")
+
         parser.add_option("-c", "--committer", dest="COMMITTER", metavar="COMITTER",
                 help="git \"Committer\" used while doing the commits (default: \"Levitation <levitation@scytale.name>\")",
                 default="Levitation <levitation@scytale.name>")
+
         parser.add_option("-w", "--wikitime", dest="WIKITIME",
                 help="When set, the commit time will be set to the revision creation, not the current system time", action="store_true",
                 default=False)
+
         parser.add_option("-M", "--metafile", dest="METAFILE", metavar="META",
                 help="File for storing meta information (17 bytes/rev) (default: .import-meta)",
                 default=".import-meta")
+
         parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="COMM",
                 help="File for storing comment information (257 bytes/rev) (default: .import-comm)",
                 default=".import-comm")
+
         parser.add_option("-U", "--userfile", dest="USERFILE", metavar="USER",
                 help="File for storing author information (257 bytes/author) (default: .import-user)",
                 default=".import-user")
+
         parser.add_option("-P", "--pagefile", dest="PAGEFILE", metavar="PAGE",
                 help="File for storing page information (257 bytes/page) (default: .import-page)",
                 default=".import-page")
+
         parser.add_option("--no-lxml", dest="NOLXML",
                 help="Do not use the lxml parser, even if it is available", action="store_true",
                 default=False)
+
+        parser.add_option("--only-blobs", dest="ONLYBLOB",
+                help="Do not do commit yet. More files are expected.", action="store_true",
+                default=False)
+
+        parser.add_option("--overwrite", dest="OVERWRITE",
+                help="Overwrite information files", action="store_true",
+                default=False)
+
         (options, args) = parser.parse_args(args)
         return (options, args)
 
 
-class SkipParserException(StandardError):
+class SkipParserException(Exception):
     pass
 
 
