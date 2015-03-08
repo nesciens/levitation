@@ -3,14 +3,14 @@
 set -e
 
 host="http://dumps.wikimedia.org"
-language="ptwiki"
-date="20150220"
+#language="ptwiki"
+#date="20150220"
 
 #language="barwiki"
 #date="20150305"
 
-#language="enwiki"
-#date="20150205"
+language="enwiki"
+date="20150205"
 
 file="pages-meta-history"
 ft="\.xml(-.+)?\.7z$"
@@ -45,8 +45,6 @@ echo "Importing into git"
 rm -rf .import-*
 rm -rf ${repo}
 git init --bare ${repo}
-
-rm -f IMPORT
 
 function do_import(){
     while IFS=" " read sum fn
