@@ -15,20 +15,32 @@ to edit some variables in the source code.
 
 You need at least Python 3.3.
 
+## Example usage
+
+See `download.sh` for a full example and usable script.
+
+This will import the pdc.wikipedia.org dump into a new Git repository `repo`:
+
+    rm -rf repo; git init --bare repo && \
+        ./import.py < ~/pdcwiki-20091103-pages-meta-history.xml | \
+        GIT_DIR=repo git fast-import | \
+        sed 's/^progress //'
+
+Please note that there’s the flag, `-m` that defaults to 100 so Levitation will
+only import 100 pages, not more. This protects you from filling your disk when
+you’re too impatient. ;) Set it to -1 when you’re ready for a "real" run.
+Execute `import.py --help` to see all available options.
 
 ### How it should be done
 
 You can get recent dumps of all Wikimedia wikis at:
 http://download.wikimedia.org/backup-index.html
 
-The pages-meta-history.xml file is what we want. (In case you’re wondering:
-Wikimedia does not offer content SQL dumps anymore, and there are now full-
-history dump for en.wikipedia.org because of its size.) It includes all pages
+The "pages-meta-history.xml" files are what we want. It includes all pages
 in all namespaces and all of their revisions.
 
 Alternatively, you may use a MediaWiki’s "Special:Export" page to create an XML
 dump of certain pages.
-
 
 ### Things that work
 
@@ -50,6 +62,10 @@ dump of certain pages.
 - Use a locally timezoned timestamp for the commit date instead of an UTC one.
 - Allow IPv6 addresses as IP edit usernames. 
 
+### Things that are broken
+
+- Ordering is by the revisions of a single page, not by time.
+
 ### Things that are strange
 
 - Since we use subdirectories, the Git repo is no longer larger than the
@@ -58,7 +74,7 @@ dump of certain pages.
 
 ### Things that are cool
 
-- `git checkout master~30000` takes you back 30,000 edits in time — and on my
+- `git checkout master~30000` takes you back 30,000 edits -- and on my
   test machine it only took about a second.
 - The XML data might be in the wrong order to directly create commits from it,
   but it is in the right order for blob delta compression: When passing blobs
@@ -66,33 +82,15 @@ dump of certain pages.
   blob -- which is the same page, one revision before. Therefore, delta
   compression will succeed and save you tons of storage.
 
-## Example usage
-
-See `download.sh` for a full example and usable script.
-
-Please note that there’s the variable IMPORT_MAX, right at the beginning of
-import.py. By default it’s set to 100, so Levitation will only import 100
-pages, not more. This protects you from filling your disk when you’re too
-impatient. ;) Set it to -1 when you’re ready for a “real” run.
-
-This will import the pdc.wikipedia.org dump into a new Git repository `repo`:
-
-    rm -rf repo; git init --bare repo && \
-        ./import.py < ~/pdcwiki-20091103-pages-meta-history.xml | \
-        GIT_DIR=repo git fast-import | \
-        sed 's/^progress //'
-
-Execute `import.py --help` to see all available options.
-
 ## Storage requirements
 
 - `maxrev` is the highest revision ID in the dump.
 - `maxpage` is the highest page ID in the dump.
 - `maxuser` is the highest user ID in the dump.
-- The revision metadata storage needs maxrev*17 bytes.
-- The revision comment storage needs maxrev*257 bytes.
-- The author name storage needs maxuser*257 bytes.
-- The page title storage needs maxpage*257 bytes.
+- The revision metadata storage needs maxrev*141 bytes.
+- The revision comment storage needs maxrev*383 bytes.
+- The author name storage needs maxuser*383 bytes.
+- The page title storage needs maxpage*383 bytes.
 
 Those files can be deleted after an import.
 
@@ -103,8 +101,6 @@ compressed XML data (see "Things that are strange").
 Note that if you want to check out a working copy, the filesystem it will be
 living on needs quite a few free inodes. If you get "no space left on device"
 errors with plenty of space available, that's what hit you.
-
-
 
 ## Contact
 
