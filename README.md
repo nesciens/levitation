@@ -26,7 +26,7 @@ Wikimedia does not offer content SQL dumps anymore, and there are now full-
 history dump for en.wikipedia.org because of its size.) It includes all pages
 in all namespaces and all of their revisions.
 
-Alternatively, you may use a MediaWiki’s “Special:Export” page to create an XML
+Alternatively, you may use a MediaWiki’s "Special:Export" page to create an XML
 dump of certain pages.
 
 
@@ -48,13 +48,7 @@ dump of certain pages.
 - Use command line options instead of hard-coded magic behavior. Thanks to
   stettberger for adding this.
 - Use a locally timezoned timestamp for the commit date instead of an UTC one.
-
-
-### Things that are still missing
-
-- Allow IPv6 addresses as IP edit usernames. (Although afaics MediaWiki itself
-  cannot handle IPv6 addresses, so we got some time.)
-
+- Allow IPv6 addresses as IP edit usernames. 
 
 ### Things that are strange
 
@@ -62,19 +56,15 @@ dump of certain pages.
   uncompressed XML file, but instead about 30% of it. This is good. However, it
   is still way larger than the bz2 compressed file, and I don’t know why.
 
-
 ### Things that are cool
-
 
 - `git checkout master~30000` takes you back 30,000 edits in time — and on my
   test machine it only took about a second.
-
 - The XML data might be in the wrong order to directly create commits from it,
   but it is in the right order for blob delta compression: When passing blobs
   to git-fast-import, delta compression will be tried based on the previous
-  blob — which is the same page, one revision before. Therefore, delta
+  blob -- which is the same page, one revision before. Therefore, delta
   compression will succeed and save you tons of storage.
-
 
 ## Example usage
 
