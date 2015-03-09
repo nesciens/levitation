@@ -62,10 +62,6 @@ dump of certain pages.
 - Use a locally timezoned timestamp for the commit date instead of an UTC one.
 - Allow IPv6 addresses as IP edit usernames. 
 
-### Things that are broken
-
-- Ordering is by the revisions of a single page, not by time.
-
 ### Things that are strange
 
 - Since we use subdirectories, the Git repo is no longer larger than the

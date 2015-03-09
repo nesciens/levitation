@@ -3,14 +3,14 @@
 set -e
 
 host="http://dumps.wikimedia.org"
-#language="ptwiki"
-#date="20150220"
+language="ptwiki"
+date="20150220"
 
-#language="barwiki"
-#date="20150305"
+language="barwiki"
+date="20150305"
 
-language="enwiki"
-date="20150205"
+#language="enwiki"
+#date="20150205"
 
 file="pages-meta-history"
 ft="\.xml(-.+)?\.7z$"
@@ -49,10 +49,10 @@ git init --bare ${repo}
 function do_import(){
     while IFS=" " read sum fn
     do
-        7z -so x ${dumpdir}/${fn} | ./import.py -w -m -1 --only-blobs
+        7z -so x ${dumpdir}/${fn} | ./levitation.py -w -m -1 --only-blobs
     done < ${dumpdir}/md5sums
 
-    ./import.py -w
+    ./levitation.py -w
 }
 
 do_import | GIT_DIR=${repo} git fast-import

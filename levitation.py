@@ -14,6 +14,7 @@ import time
 import urllib.parse
 import ipaddress
 import pickle
+import unicodedata
 from optparse import OptionParser
 
 # The encoding for input, output and internal representation. Leave alone.
@@ -38,17 +39,6 @@ def tzoffsetorzero():
 
     return r
 
-def asciiize_char(s):
-    r = ''
-    for x in s.group(0):
-        r += '%' + codecs.encode(bytearray(x, ENCODING), 'hex').decode(ENCODING).upper()
-
-    return r
-
-
-def asciiize(s):
-    return re.sub('[^A-Za-z0-9_ ()-]', asciiize_char, s)
-
 def singletext(node):
     if len(node.childNodes) == 0:
         return ''
@@ -68,17 +58,21 @@ def out(text):
 
 def progress(text):
     out('progress ' + text + '\n')
-    sys.stdout.flush()
 
 
 class Meta:
     def __init__(self, file):
-        self.struct = struct.Struct('LLLQQB')
-        self.rev_struct = struct.Struct('Q')
-        self.fh = open(file, 'ab+')
+        # L: The revision id
+        # L: The datetime
+        # L: The page id
+        # QQ: 128 bits for IPv6. Big enough to hold IPv4 and any other ids, too
+        # B: Flags about the page (minor, written by ip or deleted user)
+        self.struct = struct.Struct('=LLLQQB')
+        self.fh = open(file, 'wb+')
 
         self.domain = 'unknown.invalid'
         self.nstoid = self.idtons = {}
+        self.maxrev = -1
 
     def write(self, rev, time, page, author, minor):
         flags = 0
@@ -100,7 +94,9 @@ class Meta:
             flags
             )
 
-        self.fh.seek(rev * self.struct.size)
+        self.maxrev = max(self.maxrev, rev)
+
+        self.fh.seek(rev * self.struct.size, os.SEEK_SET)
         self.fh.write(data)
 
     def read(self, rev):
@@ -110,17 +106,15 @@ class Meta:
         if len(data) < self.struct.size:
             return None
 
-        tuple = self.struct.unpack(data)
+        data = self.struct.unpack(data)
 
-        a, b = tuple[3], tuple[4]
-        uid = (a << 64) | b
 
         d = {
-            'rev':    tuple[0],
-            'epoch':  tuple[1],
-            'time':   datetime.datetime.utcfromtimestamp(tuple[1]),
-            'page':   tuple[2],
-            'user':   uid,
+            'rev':    data[0],
+            'epoch':  data[1],
+            'time':   datetime.datetime.utcfromtimestamp(data[1]),
+            'page':   data[2],
+            'user':   (data[3] << 64) | data[4],
             'minor':  False,
             'isip':   False,
             'isdel':  False,
@@ -132,14 +126,14 @@ class Meta:
             d['exists'] = False
 
         d['day'] = d['time'].strftime('%Y-%m-%d')
-        flags = tuple[5]
+        flags = data[5]
 
         if flags & 1:
             d['minor'] = True
 
         if flags & 2:
             d['isip'] = True
-            d['user'] = str(ipaddress.ip_address(uid))
+            d['user'] = str(ipaddress.ip_address(d['user']))
 
         if flags & 4:
             d['isdel'] = True
@@ -149,23 +143,38 @@ class Meta:
 
 class StringStore:
     def __init__(self, file):
-        self.struct = struct.Struct('QL255s')
+        # B: size of string (max 255)
+        # I: flags need more space due to the occasional large Namespace ID
+        # 255s:
+        #   - The string, possibly trimmed to fit.
+        #   - We trim to 255 because:
+        #           https://www.mediawiki.org/wiki/Page_title_size_limitations
+        #   - This means comments are the only thing that will be trimmed.
+        #   - If the length of a comment is close to 255, just assume it's
+        #   trimmed.
+        #
+        self.struct = struct.Struct('=BI255s')
         self.maxid = -1
-        self.fh = open(file, 'ab+')
+        self.fh = open(file, 'wb+')
 
     def write(self, id, text, flags = 1):
-        if len(text) > 255:
-            progress('warning: trimming %s bytes long text: 0x%s' % (len(text), text.encode('hex')))
-            text = text[0:255]
+        ba = bytes(text, ENCODING)
+        if len(ba) > 255:
+            progress('warning: trimming %s bytes long text: %s' % (len(ba), ba))
+            text = text[:255]
 
-        ba = bytearray(text, ENCODING)
+        # try cutting off one unicode character at a time. this helps with
+        # decoding later when the string ends with a multibyte character.
+        while len(ba) > 255:
+            ba = bytes(text, ENCODING)
+            text = text[:-1]
+
         data = self.struct.pack(len(ba), flags, ba)
+
+        self.maxid = max(self.maxid, id)
 
         self.fh.seek(id * self.struct.size)
         self.fh.write(data)
-
-        if self.maxid < id:
-            self.maxid = id
 
     def read(self, id):
         self.fh.seek(id * self.struct.size)
@@ -180,7 +189,7 @@ class StringStore:
             d = {
                 'len':   data[0],
                 'flags': data[1],
-                'text':  data[2][0:data[0]].decode(ENCODING)
+                'text':  data[2][:data[0]].decode(ENCODING)
                 }
 
         return d
@@ -188,7 +197,7 @@ class StringStore:
 
 class User:
     def __init__(self, node, meta):
-        self.id = -1
+        self.id = 0
         self.name = None
         self.isip = self.isdel = False
 
@@ -213,7 +222,7 @@ class User:
 
 class Revision:
     def __init__(self, node, page, meta):
-        self.id = -1
+        self.id = 0
         self.minor = False
         self.timestamp = self.text = self.comment = self.user = None
         self.page = page
@@ -237,14 +246,13 @@ class Revision:
             elif lv1.tagName == 'text':
                 self.text = singletext(lv1)
 
-    def dump(self):
         self.meta['meta'].write(self.id, self.timestamp, self.page, self.user, self.minor)
 
         if self.comment:
             self.meta['comm'].write(self.id, self.comment)
 
         fmt = 'blob\nmark :{0}\ndata {1}\n'
-        datalen = len(bytearray(self.text, ENCODING))
+        datalen = len(bytes(self.text, ENCODING))
         out(fmt.format(self.id, datalen))
         out(self.text + '\n')
 
@@ -253,7 +261,7 @@ class Page:
     def __init__(self, meta):
         self.title = self.fulltitle = ''
         self.nsid = 0
-        self.id = -1
+        self.id = 0
         self.meta = meta
 
     def setTitle(self, title):
@@ -276,8 +284,7 @@ class Page:
             self.meta['page'].write(self.id, self.title, self.nsid)
 
     def addRevision(self, dom):
-        r = Revision(dom, self.id, self.meta)
-        r.dump()
+        Revision(dom, self.id, self.meta)
 
 
 class XMLError(ValueError):
@@ -293,6 +300,8 @@ class ParserHandler:
         self.writer = writer
 
     def attrSplit(self, attrs):
+        if attrs == None:
+            return {}
         r = {}
         for k, v in attrs.items():
             nk = self.nsSplit(k)
@@ -509,6 +518,9 @@ class BlobWriter:
         if attrs == False:
             self.page.addRevision(self.captureGet())
 
+def sanitize(s):
+   return s.replace('/', '\x1c')
+
 class Committer:
     def __init__(self, meta):
         self.meta = meta
@@ -517,7 +529,10 @@ class Committer:
                 'commit (but not author) times will most likely be wrong' % tzoffsetorzero())
 
     def work(self):
-        rev = commit = 1
+        # start commit id at from the top to avoid hitting any ids in the XML
+        commit = sys.maxsize
+
+        rev = 0
         day = ''
         meta = self.meta['meta'].read(rev)
 
@@ -527,18 +542,21 @@ class Committer:
 
             page = self.meta['page'].read(meta['page'])
             comm = self.meta['comm'].read(meta['rev'])
-            namespace = asciiize('%d-%s' % (
-                page['flags'],
-                self.meta['meta'].idtons[page['flags']]
-                ))
-            title = os.path.normpath(asciiize(page['text']))
-            subdirtitle = ''
+            namespace = '%d-%s' % (page['flags'], self.meta['meta'].idtons[page['flags']])
+
+            path = sanitize(namespace)
+            # delay sanitizing title so the dir structure captures the char
+            title = page['text']
 
             for i in range(0, min(self.meta['options'].DEEPNESS, len(title))):
-                subdirtitle += title[i] + '/'
+                path = os.path.join(path,
+                                    codecs.encode(
+                                        bytes(title[i], ENCODING),
+                                        'hex').decode(ENCODING))
 
-            subdirtitle += title
-            filename = namespace + '/' + subdirtitle + '.mediawiki'
+            path = os.path.join(path, title + '.mediawiki')
+
+            filename = os.path.normpath(path)
 
             if meta['minor']:
                 minor = ' (minor)'
@@ -547,15 +565,10 @@ class Committer:
 
             msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (meta['page'], meta['rev'], minor)
 
-            if commit == 1:
-                commit = max(
-                            self.meta['page'].maxid,
-                            self.meta['comm'].maxid,
-                            self.meta['user'].maxid
-                        )
+            if commit == sys.maxsize:
                 fromline = ''
             else:
-                fromline = 'from :%d\n' % (commit - 1)
+                fromline = 'from :%d\n' % (commit + 1)
 
             if day != meta['day']:
                 day = meta['day']
@@ -586,13 +599,13 @@ class Committer:
                 'mark :%d\n' % commit +
                 'author %s <%s@git.%s> %d +0000\n' % (author, authoruid, self.meta['meta'].domain, meta['epoch']) +
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
-                'data %d\n%s\n' % (len(bytearray(msg, ENCODING)), msg) +
+                'data %d\n%s\n' % (len(bytes(msg, ENCODING)), msg) +
                 fromline +
                 'M 100644 :%d %s\n' % (meta['rev'], filename)
                 )
 
             rev += 1
-            commit += 1
+            commit -= 1
             meta = self.meta['meta'].read(rev)
 
 
@@ -644,6 +657,12 @@ class LevitationImport:
         else:
             progress('Step 2: Writing commits.')
             Committer(meta).work()
+
+
+        meta['meta'].fh.close()
+        meta['comm'].fh.close()
+        meta['user'].fh.close()
+        meta['page'].fh.close()
 
 
     def parse_args(self, args):
@@ -702,4 +721,5 @@ class SkipParserException(Exception):
     pass
 
 
-LevitationImport()
+if __name__ == '__main__':
+    LevitationImport()

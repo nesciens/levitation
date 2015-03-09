@@ -1,3 +1,3 @@
 #!/bin/sh
 
-hexdump -e '"%08_ax " 4/4 "%08x " 1/1 " %02x" "\n"' "$@" | less
+hexdump -e '"%08_ax: " 7/4 " %04x " 1/1 " %01x" "\n"' "$@" | less
