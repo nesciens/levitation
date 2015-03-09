@@ -549,7 +549,9 @@ class Committer:
         meta = self.meta['meta'].read(rev)
 
         while meta:
+            rev += 1
             if not meta['exists']:
+                meta = self.meta['meta'].read(rev)
                 continue
 
             page = self.meta['page'].read(meta['page'])
@@ -616,7 +618,6 @@ class Committer:
                 'M 100644 :%d %s\n' % (meta['rev'], filename)
                 )
 
-            rev += 1
             commit -= 1
             meta = self.meta['meta'].read(rev)
 
