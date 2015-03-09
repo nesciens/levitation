@@ -84,9 +84,9 @@ dump of certain pages.
 - `maxpage` is the highest page ID in the dump.
 - `maxuser` is the highest user ID in the dump.
 - The revision metadata storage needs maxrev*141 bytes.
-- The revision comment storage needs maxrev*383 bytes.
-- The author name storage needs maxuser*383 bytes.
-- The page title storage needs maxpage*383 bytes.
+- The revision comment storage needs maxrev*258 bytes.
+- The author name storage needs maxuser*258 bytes.
+- The page title storage needs maxpage*258 bytes.
 
 Those files can be deleted after an import.
 
