@@ -529,7 +529,7 @@ class Committer:
                 'commit (but not author) times will most likely be wrong' % tzoffsetorzero())
 
     def work(self):
-        # start commit id at from the top to avoid hitting any ids in the XML
+        # start commit id from the top to avoid hitting any ids in the XML
         commit = sys.maxsize
 
         rev = 0
@@ -554,7 +554,7 @@ class Committer:
                                         bytes(title[i], ENCODING),
                                         'hex').decode(ENCODING))
 
-            path = os.path.join(path, title + '.mediawiki')
+            path = os.path.join(path, sanitize(title) + '.mediawiki')
 
             filename = os.path.normpath(path)
 
