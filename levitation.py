@@ -60,6 +60,16 @@ def progress(text):
     out('progress ' + text + '\n')
 
 
+def open_file(fn):
+    if not os.path.exists(fn):
+        # create the file if it doesn't exist yet
+        with open(fn, 'w+b') as f:
+            f.write(b'')
+
+    # use r+b instead of w+b so the file isn't trunctated on open
+    return open(fn, 'r+b')
+
+
 class Meta:
     def __init__(self, file):
         # L: The revision id
@@ -68,7 +78,8 @@ class Meta:
         # QQ: 128 bits for IPv6. Big enough to hold IPv4 and any other ids, too
         # B: Flags about the page (minor, written by ip or deleted user)
         self.struct = struct.Struct('=LLLQQB')
-        self.fh = open(file, 'wb+')
+
+        self.fh = open_file(file)
 
         self.domain = 'unknown.invalid'
         self.nstoid = self.idtons = {}
@@ -155,7 +166,8 @@ class StringStore:
         #
         self.struct = struct.Struct('=BI255s')
         self.maxid = -1
-        self.fh = open(file, 'wb+')
+
+        self.fh = open_file(file)
 
     def write(self, id, text, flags = 1):
         ba = bytes(text, ENCODING)
