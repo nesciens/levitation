@@ -66,7 +66,7 @@ cd ${oldPWD}
 echo ""
 echo "Importing into git"
 
-if [ -s ${progfile} || ! -f ${progfile} ]; then
+if [[ -s ${progfile} ]]  || [[ ! -f ${progfile} ]]; then
     echo "Progress file ${profile} not found, starting anew."
     rm -rf ${markfile} ${metafile} ${commfile} ${userfile} ${pagefile}
     rm -rf ${repo}
@@ -104,7 +104,12 @@ while IFS=" " read sum fn; do
 done < ${dumpdir}/md5sums
 
 # create the commits
-./levitation.py -w | GIT_DIR=${repo} git fast-import --import-marks=${marksfile}
+./levitation.py -w \
+        --metafile=${metafile} \
+        --commfile=${commfile} \
+        --userfile=${userfile} \
+        --pagefile=${pagefile} \
+    | GIT_DIR=${repo} git fast-import --import-marks=${marksfile}
 
 # let git clean up a few bytes now that we're done.
 GIT_DIR=${repo} git gc
