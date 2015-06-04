@@ -98,8 +98,8 @@ while IFS=" " read sum fn; do
                 --pagefile=${pagefile} \
             | GIT_DIR=${repo} git fast-import \
                 --import-marks-if-exists=${markfile} \
-                --export-marks=${markfile}
-        echo ${fn} >> ${progfile}
+                --export-marks=${markfile} \
+            && echo ${fn} >> ${progfile}
     fi
 done < ${dumpdir}/md5sums
 
