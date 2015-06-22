@@ -12,7 +12,7 @@ set -e
 #language="barwiki"
 #date="20150305"
 language="enwiki"
-date="20150205"
+date="20150602"
 
 # Where are the dumps going to be
 dumpdir=/mnt/6000/${language}-dumps
@@ -66,7 +66,7 @@ cd ${oldPWD}
 echo ""
 echo "Importing into git"
 
-if [[ -s ${progfile} ]]  || [[ ! -f ${progfile} ]]; then
+if [[ ! -e ${progfile} ]] ; then
     echo "Progress file ${profile} not found, starting anew."
     rm -rf ${markfile} ${metafile} ${commfile} ${userfile} ${pagefile}
     rm -rf ${repo}
