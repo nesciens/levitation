@@ -340,7 +340,7 @@ class ExpatHandler(ParserHandler):
         self.expat.StartElementHandler  = self.start
         self.expat.EndElementHandler    = self.end
         self.expat.CharacterDataHandler = self.data
-        self.expat.ParseFile(what)
+        self.expat.ParseFile(what.buffer)
 
     def nsSplit(self, name):
         s = name.split(self.nssepa, 1)
