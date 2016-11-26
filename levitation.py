@@ -66,7 +66,7 @@ def open_file(fn):
         with open(fn, 'w+b') as f:
             f.write(b'')
 
-    # use r+b instead of w+b so the file isn't trunctated on open
+    # use r+b instead of w+b so the file isn't truncated on open
     return open(fn, 'r+b')
 
 
