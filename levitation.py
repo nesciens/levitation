@@ -263,9 +263,7 @@ class Revision:
         if self.comment:
             self.meta['comm'].write(self.id, self.comment)
 
-        fmt = 'blob\nmark :{0}\ndata {1}\n'
-        datalen = len(bytes(self.text, ENCODING))
-        out(fmt.format(self.id, datalen))
+        out('blob\nmark :{}\ndata {}\n'.format(self.id, len(bytes(self.text, ENCODING))))
         out(self.text + '\n')
 
 
