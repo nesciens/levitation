@@ -13,6 +13,7 @@ import sys
 import time
 import urllib.parse
 import ipaddress
+import itertools
 import pickle
 import unicodedata
 from optparse import OptionParser
@@ -589,7 +590,31 @@ class BlobWriter:
 
 
 def sanitize(s):
-   return s.replace('/', '\x1c')
+    return s.replace('/', '\x1c')
+
+
+def create_path(namespace, title, deepness):
+    """Generate the path according to options.
+
+    The path is the-namespace/74/68/65/the-page-title, where the hexadecimal
+    numbers in the middle are hexadecimal for the page title's first few
+    characters.
+
+    Args:
+       namespace: string, unsanitized namespace name.
+       title: string, unsanitized page title.
+       deepness: int, non-negative number of hexadecimal numbers to use.
+
+    Returns:
+       string, the path, already sanitized.
+    """
+    path = sanitize(namespace)
+    for c in title[:deepness]:
+        path = os.path.join(
+            path,
+            codecs.encode(bytes(c, ENCODING), 'hex').decode(ENCODING))
+    path = os.path.join(path, sanitize(title) + '.mediawiki')
+    return path
 
 
 class Committer:
@@ -600,85 +625,63 @@ class Committer:
                 'commit (but not author) times will most likely be wrong' % tzoffsetorzero())
 
     def work(self):
-        # start commit id from the top to avoid hitting any ids in the XML
-        commit = sys.maxsize
-
-        rev = 0
+        prevmark = None
+        mark = None
         day = ''
-        meta = self.meta['meta'].read(rev)
-
-        while meta:
-            rev += 1
-            if not meta['exists']:
-                meta = self.meta['meta'].read(rev)
+        for index in itertools.count(start=0, step=1):
+            # Update loop variables.
+            info = self.meta['meta'].read(index)
+            if not info:
+                break
+            if not info['exists']:
                 continue
+            prevmark = mark
+            # Start mark id from the top to avoid hitting any ids in the XML,
+            # which are used as marks for blobs.
+            mark = mark - 1 if mark is not None else sys.maxsize
 
-            page = self.meta['page'].read(meta['page'])
-            comm = self.meta['comm'].read(meta['rev'])
-            namespace = '%d-%s' % (page['flags'], self.meta['meta'].idtons[page['flags']])
-
-            path = sanitize(namespace)
-            # delay sanitizing title so the dir structure captures the char
-            title = page['text']
-
-            for i in range(0, min(self.meta['options'].DEEPNESS, len(title))):
-                path = os.path.join(path,
-                                    codecs.encode(
-                                        bytes(title[i], ENCODING),
-                                        'hex').decode(ENCODING))
-
-            path = os.path.join(path, sanitize(title) + '.mediawiki')
-
-            filename = os.path.normpath(path)
-
-            if meta['minor']:
-                minor = ' (minor)'
-            else:
-                minor = ''
-
-            msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (meta['page'], meta['rev'], minor)
-
-            if commit == sys.maxsize:
-                fromline = ''
-            else:
-                fromline = 'from :%d\n' % (commit + 1)
-
-            if day != meta['day']:
-                day = meta['day']
+            # Update progress indicator.
+            if day != info['day']:
+                day = info['day']
                 progress('   ' + day)
 
-            if meta['isip']:
-                author = meta['user']
+            # Calculate all the data needed for the blob.
+            page = self.meta['page'].read(info['page'])
+            comm = self.meta['comm'].read(info['rev'])
+            namespace = '%d-%s' % (page['flags'], self.meta['meta'].idtons[page['flags']])
+            filename = os.path.normpath(
+                create_path(namespace, page['text'], self.meta['options'].DEEPNESS))
+            msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (
+                    info['page'], info['rev'], ' (minor)' if info['minor'] else '')
+            fromline = 'from :%d\n' % prevmark if prevmark is not None else ''
+
+            if info['isip']:
+                author = info['user']
                 authoruid = 'ip-' + author
-            elif meta['isdel']:
+            elif info['isdel']:
                 author = '[deleted user]'
                 authoruid = 'deleted'
             else:
-                authoruid = 'uid-' + str(meta['user'])
-                author = self.meta['user'].read(meta['user'])['text']
+                authoruid = 'uid-' + str(info['user'])
+                author = self.meta['user'].read(info['user'])['text']
 
-            # Check which committime should be used
             if self.meta['options'].WIKITIME:
-                # Use the committime read from the dumpfile
-                committime = meta['epoch']
+                committime = info['epoch']
                 offset = '+0000'
             else:
-                # Use the current systemtime
                 committime = time.time()
                 offset = tzoffsetorzero()
 
+            # Write out the commit.
             out(
                 'commit refs/heads/master\n' +
-                'mark :%d\n' % commit +
-                'author %s <%s@git.%s> %d +0000\n' % (author, authoruid, self.meta['meta'].domain, meta['epoch']) +
+                'mark :%d\n' % mark +
+                'author %s <%s@git.%s> %d +0000\n' % (author, authoruid, self.meta['meta'].domain, info['epoch']) +
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
                 'data %d\n%s\n' % (len(bytes(msg, ENCODING)), msg) +
                 fromline +
-                'M 100644 :%d %s\n' % (meta['rev'], filename)
-                )
-
-            commit -= 1
-            meta = self.meta['meta'].read(rev)
+                'M 100644 :%d %s\n' % (info['rev'], filename)
+            )
 
 
 class LevitationImport:
