@@ -365,171 +365,236 @@ class LxmlHandler(ParserHandler):
         self.lxml = None
 
 
+class StackManager:
+    """Object to manage a stack of handlers for walking XML.
+
+    At each time there are three 'active' handlers:
+
+    0.  A handler to be called when the start of a sub-element has been read.
+        This handler gets called with the tag of the element, and the dict of
+        its attributes. This handler needs to return a new tuple of handlers,
+        which will remain active until after the end of the sub-element has been
+        read. Then we revert to the previous set of active handlers.
+
+    1.  A handler to be called when the end of the current element has been
+        read. This handler gets called with the tag of the element.
+
+    2.  A handler to be called for text nodes. This gets called with the content
+        of the text node.
+
+    Usage:
+      parser = ExpatParser(StackManager((start_doc, consume_text, end_doc))
+      parser.run(sys.sys.stdin)
+
+    Attributes:
+      active: tuple of active handlers.
+      stack: stack of tuples of previously active handlers, ready to be
+          reinstated.
+    """
+
+    def __init__(self, initial_handlers):
+        self.active = initial_handlers
+        self.stack = []
+
+    def push(self, handlers=(None, None, None)):
+        """Replace the active handlers.
+
+        Args:
+          handlers: the tuple of new handlers.
+        """
+        self.stack.append(self.active)
+        self.active = handlers
+
+    def pop(self):
+        """Revert to the previous set of active handlers."""
+        if not self.stack:
+            raise XMLError('more closing than opening tags')
+        self.active = self.stack.pop()
+
+    def startElement(self, tag, attrs):
+        """Process the start of an element.
+
+        That means calling the active start-of-element handler, and making a new
+        set of handler active.
+        """
+        if self.active[0]:
+            self.push(self.active[0](tag, attrs))
+        else:
+            # Ignore deeper elements, as there was not handler to tell us how to
+            # process them.
+            self.push()
+
+    def endElement(self, name):
+        """Process the end of an element."""
+        if self.active[1]:
+            self.active[1](name)
+        self.pop()
+
+    def characters(self, content):
+        """Process a text node."""
+        if self.active[2]:
+            self.active[2](content)
+
+
+class Cases(object):
+    """Handler that dispatches to passed handlers.
+
+    Attributes:
+      cases: dict, mapping unqualified tag names to handlers to dispatch to.
+    """
+
+    def __init__(self, **kwargs):
+        self.cases = kwargs
+
+    def __call__(self, tag, attrs):
+        if tag[1] in self.cases:
+            return self.cases[tag[1]](tag, attrs)
+        return (None, None, None)
+
+
+class Capture(object):
+    """Handler to save an element into a DOM.
+
+    Attributes:
+      cb: callable to be called with the root element of the DOM when the
+          capture is done.
+    """
+
+    def __init__(self, cb=None):
+        self.cb = cb
+        self._dom = self._currentnode = None
+
+    def __call__(self, tag, attrs):
+        if self._dom or self._currentnode:
+            raise XMLError("Capture requested while already in progress.")
+        self._dom = xml.dom.getDOMImplementation().createDocument(
+                tag[0], tag[1], None)
+        self._currentnode = self._dom.documentElement
+        for k, v in attrs.items():
+            self._currentnode.setAttributeNS(k[0], k[1], v)
+        return (self.start_sub, self.finish, self.handle_text)
+
+    def finish(self, tag):
+        if not self._dom or not self._currentnode:
+            raise XMLError("Capture termination requested while not in progress.")
+        if self.cb:
+          self.cb(self._dom.documentElement)
+        self._dom = self._currentnode = None
+
+    def start_sub(self, tag, attrs):
+        self._currentnode = self._currentnode.appendChild(
+                self._dom.createElementNS(tag[0], tag[1]))
+        for k, v in attrs.items():
+            self._currentnode.setAttributeNS(k[0], k[1], v)
+        return (self.start_sub, self.end_sub, self.handle_text)
+
+    def end_sub(self, tag):
+        self._currentnode = self._currentnode.parentNode
+
+    def handle_text(self, content):
+        self._currentnode.appendChild(self._dom.createTextNode(content))
+
+
 class BlobWriter:
+    """Object to parse Mediawiki XML and write out blobs.
+
+    Attributes:
+      canceled: bool, whether we canceled the operation.
+      imported: int, number of pages imported so far.
+      meta: dict, containing metadata, such as file locations and mediawikie
+          namespace to id mapping.
+      page: Current page being processed.
+      parser: xml parser that this object is driven by.
+    """
+
     def __init__(self, meta):
         self.imported = 0
-        self.cancelled = False
+        self.canceled = False
         self.meta = meta
-        self.parser = self.dom = self.page = None
-        firsthandler = self.in_doc
-        self.handler = firsthandler
-        self.handlers = [firsthandler]
-        self.hpos = 0
-        self.text = None
+        self.parser = self.page = None
 
     def parse(self, parser):
-        self.parser = parser(self)
+        self.parser = parser(StackManager((self.start_root, None, None)))
         try:
             self.parser.run(sys.stdin)
         except CancelException:
-            if not self.cancelled:
+            if not self.canceled:
                 raise
 
-    def runHandler(self, name, attrs):
-        # Check the namespace.
-        if not name[0] == XMLNS:
-            if self.hpos > 0:
-                # If this is not the root element, simply ignore it.
-                return
-            else:
-                # If this is the root element, refuse to parse it.
-                raise XMLError('XML document needs to be in MediaWiki Export Format 0.10')
-
-        # If there is no handler, this tag shall be ignored.
-        if self.handler == None:
-            return
-
-        # Run the handler and return its return value (possibly a sub-handler).
-        return self.handler(name, attrs)
-
-    def startElement(self, name, attrs):
-        # If capturing, add a new element.
-        if self.dom:
-            self.finishText()
-            self.currentnode = self.currentnode.appendChild(self.dom.createElementNS(name[0], name[1]))
-            for k, v in attrs.items():
-                self.currentnode.setAttributeNS(k[0], k[1], v)
-
-        # Run the handler and add the sub-handler to the handler stack.
-        nexthandler = self.runHandler(name, attrs)
-        self.handlers.append(nexthandler)
-        self.hpos += 1
-        self.handler = nexthandler
-
-    def endElement(self, name):
-        # If capturing, point upwards.
-        if self.dom:
-            self.finishText()
-            self.currentnode = self.currentnode.parentNode
-
-        # Tell the handler that its element is done.
-        self.runHandler(name, False)
-
-        # Remove the sub-handler.
-        self.handlers.pop()
-        self.hpos -= 1
-
-        # Check whether we have more closing tags than opening.
-        if self.hpos < 0:
-            raise XMLError('more closing than opening tags')
-
-        # Update the current handler.
-        self.handler = self.handlers[self.hpos]
-
-    def characters(self, content):
-        # If capturing, append content to internal text buffer.
-        if self.dom:
-            if self.text == None:
-                self.text = content
-            else:
-                self.text += content
-
-    def finishText(self):
-        # Called before something that ends a text node is added.
-        if not self.text == None:
-            self.currentnode.appendChild(self.dom.createTextNode(self.text))
-            self.text = None
-
-    def captureStart(self, name):
-        self.dom = xml.dom.getDOMImplementation().createDocument(name[0], name[1], None)
-        self.currentnode = self.dom.documentElement
-
-    def captureGet(self):
-        dom = self.dom
-        self.dom = None
-        return dom.documentElement
-
-    def in_doc(self, name, attrs):
-        if name[1] == 'mediawiki':
-            return self.in_mediawiki
-        else:
+    def start_root(self, tag, attrs):
+        if tag[0] != XMLNS:
+            raise XMLError('XML document needs to be in MediaWiki Export Format 0.10')
+        if tag[1] != 'mediawiki':
             raise XMLError('document tag is not <mediawiki>')
+        return (
+            Cases(
+                page=self.start_page,
+                siteinfo=lambda tag, attrs: (
+                    Cases(
+                        base=Capture(self.process_captured_base),
+                        namespaces=lambda tag, attrs: (
+                            Cases(
+                                namespace=Capture(self.process_captured_namespace)
+                            ),
+                            None,
+                            None,
+                        ),
+                    ),
+                    None,
+                    None,
+                ),
+            ),
+            None,
+            None,
+        )
 
-    def in_mediawiki(self, name, attrs):
-        if name[1] == 'siteinfo':
-            return self.in_siteinfo
-        if name[1] == 'page':
-            self.page = Page(self.meta)
-            return self.in_page
+    def process_captured_base(self, node):
+        self.meta['meta'].domain = urllib.parse.urlparse(singletext(node)).hostname
 
-    def in_siteinfo(self, name, attrs):
-        if name[1] == 'base':
-            self.captureStart(name)
-            return self.in_base
-        elif name[1] == 'namespaces':
-            return self.in_namespaces
+    def process_captured_namespace(self, node):
+        key = int(node.getAttribute('key'))
+        name = singletext(node)
+        self.meta['meta'].idtons[key] = name
+        self.meta['meta'].nstoid[name] = key
 
-    def in_base(self, name, attrs):
-        if attrs == False:
-            self.meta['meta'].domain = urllib.parse.urlparse(singletext(self.captureGet())).hostname
+    def start_page(self, tag, attrs):
+        if self.page:
+            raise XMLError("Page capture requested while already in progress.")
+        self.page = Page(self.meta)
+        return (
+            Cases(
+                title=Capture(self.process_captured_title),
+                id=Capture(self.process_captured_page_id),
+                revision=Capture(self.process_captured_revision),
+            ),
+            self.end_page,
+            None,
+        )
 
-    def in_namespaces(self, name, attrs):
-        if name[1] == 'namespace':
-            self.captureStart(name)
-            self.nskey = int(attrs[('', 'key')]) # FIXME: not namespace-safe?
-            return self.in_namespace
+    def end_page(self, name):
+        if not self.page:
+            raise XMLError("Page termination requested while not in progress.")
+        self.page = None
+        self.imported += 1
+        max = self.meta['options'].IMPORT_MAX
+        if max > 0 and self.imported >= max:
+            self.canceled = True
+            raise CancelException()
 
-    def in_namespace(self, name, attrs):
-        if attrs == False:
-            v = singletext(self.captureGet())
-            self.meta['meta'].idtons[self.nskey] = v
-            self.meta['meta'].nstoid[v] = self.nskey
+    def process_captured_title(self, node):
+        self.page.setTitle(singletext(node))
+        progress('   ' + self.page.fulltitle)
 
-    def in_page(self, name, attrs):
-        if attrs == False:
-            self.imported += 1
-            max = self.meta['options'].IMPORT_MAX
-            if max > 0 and self.imported >= max:
-                self.cancelled = True
-                raise CancelException()
-        else:
-            if name[1] == 'title':
-                self.captureStart(name)
-                return self.in_title
+    def process_captured_page_id(self, node):
+        self.page.setID(int(singletext(node)))
 
-            if name[1] == 'id':
-                self.captureStart(name)
-                return self.in_page_id
+    def process_captured_revision(self, node):
+        self.page.addRevision(node)
 
-            if name[1] == 'revision':
-                self.captureStart(name)
-                return self.in_revision
-
-    def in_title(self, name, attrs):
-        if attrs == False:
-            self.page.setTitle(singletext(self.captureGet()))
-            progress('   ' + self.page.fulltitle)
-
-    def in_page_id(self, name, attrs):
-        if attrs == False:
-            self.page.setID(int(singletext(self.captureGet())))
-
-    def in_revision(self, name, attrs):
-        if attrs == False:
-            self.page.addRevision(self.captureGet())
 
 def sanitize(s):
    return s.replace('/', '\x1c')
+
 
 class Committer:
     def __init__(self, meta):
