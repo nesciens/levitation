@@ -40,16 +40,12 @@ def tzoffsetorzero():
     return r
 
 def singletext(node):
-    if len(node.childNodes) == 0:
-        return ''
-
-    if len(node.childNodes) != 1:
-        raise Exception('singletext has wrong number of children' + node.toxml())
-
-    if node.childNodes[0].nodeType != node.TEXT_NODE:
-        raise Exception('singletext child is not text')
-
-    return node.childNodes[0].data
+    res = ''
+    for child in node.childNodes:
+        if child.nodeType != node.TEXT_NODE:
+            raise XMLError('singletext child %s is not text' % (child.toxml()))
+        res += child.data
+    return res
 
 
 def out(text):
