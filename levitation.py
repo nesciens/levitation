@@ -664,6 +664,10 @@ class Committer:
             else:
                 authoruid = 'uid-' + str(info['user'])
                 author = self.meta['user'].read(info['user'])['text']
+            if self.meta['options'].AUTHOR_DOMAIN:
+              email = authoruid + '@' + self.meta['options'].AUTHOR_DOMAIN
+            else:
+              email = authoruid + '@git.' + self.meta['meta'].domain
 
             if self.meta['options'].WIKITIME:
                 committime = info['epoch']
@@ -676,7 +680,7 @@ class Committer:
             out(
                 'commit refs/heads/master\n' +
                 'mark :%d\n' % mark +
-                'author %s <%s@git.%s> %d +0000\n' % (author, authoruid, self.meta['meta'].domain, info['epoch']) +
+                'author %s <%s> %d +0000\n' % (author, email, info['epoch']) +
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
                 'data %d\n%s\n' % (len(bytes(msg, ENCODING)), msg) +
                 fromline +
@@ -751,6 +755,10 @@ class LevitationImport:
         parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="DEEPNESS",
                 help="Specify the deepness of the result directory structure (default: 3)",
                 default=3, type="int")
+
+        parser.add_option("-a", "--author-domain", dest="AUTHOR_DOMAIN", metavar="AUTHOR_DOMAIN",
+                help="Domain for synthesizing author 'e-mail' addresses, by default git.[domain name from dump] is used (default: \"\")",
+                default="")
 
         parser.add_option("-c", "--committer", dest="COMMITTER", metavar="COMITTER",
                 help="git \"Committer\" used while doing the commits (default: \"Levitation <levitation@scytale.name>\")",
