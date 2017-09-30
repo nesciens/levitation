@@ -706,7 +706,7 @@ class LevitationImport:
             # clear the info files
             for each in ['meta.pkl', options.METAFILE, options.COMMFILE, options.USERFILE, options.PAGEFILE]:
                 with open(each, 'wb+') as f:
-                    f.write('')
+                    f.truncate(0)
 
         meta = {
             'options': options,
