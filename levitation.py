@@ -748,19 +748,19 @@ class LevitationImport:
         usage = 'Usage: git init --bare repo && bzcat pages-meta-history.xml.bz2 | \\\n' \
                 '       %prog [options] | GIT_DIR=repo git fast-import | sed \'s/^progress //\''
         parser = OptionParser(usage=usage)
-        parser.add_option("-m", "--max", dest="IMPORT_MAX", metavar="IMPORT_MAX",
+        parser.add_option("-m", "--max", dest="IMPORT_MAX", metavar="INT",
                 help="Specify the maximum pages to import, -1 for all (default: 100)",
                 default=100, type="int")
 
-        parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="DEEPNESS",
+        parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="INT",
                 help="Specify the deepness of the result directory structure (default: 3)",
                 default=3, type="int")
 
-        parser.add_option("-a", "--author-domain", dest="AUTHOR_DOMAIN", metavar="AUTHOR_DOMAIN",
+        parser.add_option("-a", "--author-domain", dest="AUTHOR_DOMAIN", metavar="DOMAIN",
                 help="Domain for synthesizing author 'e-mail' addresses, by default git.[domain name from dump] is used (default: \"\")",
                 default="")
 
-        parser.add_option("-c", "--committer", dest="COMMITTER", metavar="COMITTER",
+        parser.add_option("-c", "--committer", dest="COMMITTER", metavar="COMMITTER",
                 help="git \"Committer\" used while doing the commits (default: \"Levitation <levitation@scytale.name>\")",
                 default="Levitation <levitation@scytale.name>")
 
@@ -768,19 +768,19 @@ class LevitationImport:
                 help="When set, the commit time will be set to the revision creation, not the current system time", action="store_true",
                 default=False)
 
-        parser.add_option("-M", "--metafile", dest="METAFILE", metavar="META",
+        parser.add_option("-M", "--metafile", dest="METAFILE", metavar="FILE",
                 help="File for storing meta information (17 bytes/rev) (default: import-meta)",
                 default="import-meta")
 
-        parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="COMM",
+        parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="FILE",
                 help="File for storing comment information (257 bytes/rev) (default: import-comm)",
                 default="import-comm")
 
-        parser.add_option("-U", "--userfile", dest="USERFILE", metavar="USER",
+        parser.add_option("-U", "--userfile", dest="USERFILE", metavar="FILE",
                 help="File for storing author information (257 bytes/author) (default: import-user)",
                 default="import-user")
 
-        parser.add_option("-P", "--pagefile", dest="PAGEFILE", metavar="PAGE",
+        parser.add_option("-P", "--pagefile", dest="PAGEFILE", metavar="FILE",
                 help="File for storing page information (257 bytes/page) (default: import-page)",
                 default="import-page")
 
