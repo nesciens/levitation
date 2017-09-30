@@ -625,16 +625,34 @@ class Committer:
                 'commit (but not author) times will most likely be wrong' % tzoffsetorzero())
 
     def work(self):
+        if self.meta['options'].SORT:
+            # TODO: Avoid reading all infos into memory, sort them on disk
+            # instead.
+            progress("Reading in all basic revision information. If this uses too much memory, try without --sort.")
+            infos = []
+            for index in itertools.count(start=0, step=1):
+                info = self.meta['meta'].read(index)
+                if not info:
+                    break
+                if info['exists']:
+                    infos.append(info)
+            progress("Sorting basic revision information by time. If this takes too long, try without --sort.")
+            infos.sort(key=lambda x: x['epoch'])
+        else:
+            def gen():
+                """Generator for revision information."""
+                for index in itertools.count(start=0, step=1):
+                    info = self.meta['meta'].read(index)
+                    if not info:
+                        break
+                    if info['exists']:
+                        yield info
+            infos = gen()
+
         prevmark = None
         mark = None
         day = ''
-        for index in itertools.count(start=0, step=1):
-            # Update loop variables.
-            info = self.meta['meta'].read(index)
-            if not info:
-                break
-            if not info['exists']:
-                continue
+        for info in infos:
             prevmark = mark
             # Start mark id from the top to avoid hitting any ids in the XML,
             # which are used as marks for blobs.
@@ -759,6 +777,10 @@ class LevitationImport:
         parser.add_option("-a", "--author-domain", dest="AUTHOR_DOMAIN", metavar="DOMAIN",
                 help="Domain for synthesizing author 'e-mail' addresses, by default git.[domain name from dump] is used (default: \"\")",
                 default="")
+
+        parser.add_option("--sort", dest="SORT",
+                help="Order commits by time instead of revision id.", action="store_true",
+                default=False)
 
         parser.add_option("-c", "--committer", dest="COMMITTER", metavar="COMMITTER",
                 help="git \"Committer\" used while doing the commits (default: \"Levitation <levitation@scytale.name>\")",
