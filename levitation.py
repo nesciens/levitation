@@ -745,7 +745,7 @@ class LevitationImport:
                 '       %prog [options] | GIT_DIR=repo git fast-import | sed \'s/^progress //\''
         parser = OptionParser(usage=usage)
         parser.add_option("-m", "--max", dest="IMPORT_MAX", metavar="IMPORT_MAX",
-                help="Specify the maxium pages to import, -1 for all (default: 100)",
+                help="Specify the maximum pages to import, -1 for all (default: 100)",
                 default=100, type="int")
 
         parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="DEEPNESS",
