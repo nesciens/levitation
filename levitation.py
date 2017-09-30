@@ -67,6 +67,36 @@ def open_file(fn):
     return open(fn, 'r+b')
 
 
+def get_mark(ns, num):
+    """Return a mark number.
+
+    Since git-fast-import(1) marks are used for blobs as well as commits, some
+    care needs to be taking to avoid conflicts. This function takes care of that
+    by generating distinct sequences of marks for each 'mark namespace'.
+
+    This function assume that the following are the 'mark namespaces':
+    0: revisions
+    1: commits
+
+    Args:
+      ns: integer, the 'mark namespace' number.
+      num: non-negative integer, number to generate a mark for within the 'mark
+         namespace' ns.
+
+    Returns:
+      A positive integer.
+    """
+    return 1 + ns + 2*num
+
+
+def revision_mark(revision_id):
+    return get_mark(0, revision_id)
+
+
+def commit_mark(commit_number):
+    return get_mark(1, commit_number)
+
+
 class Meta:
     def __init__(self, file):
         # L: The revision id
@@ -260,7 +290,8 @@ class Revision:
         if self.comment:
             self.meta['comm'].write(self.id, self.comment)
 
-        out('blob\nmark :{}\ndata {}\n'.format(self.id, len(bytes(self.text, ENCODING))))
+        out('blob\nmark :{}\ndata {}\n'.format(
+            revision_mark(self.id), len(bytes(self.text, ENCODING))))
         out(self.text + '\n')
 
 
@@ -649,14 +680,10 @@ class Committer:
                         yield info
             infos = gen()
 
-        prevmark = None
-        mark = None
+        commit_num = -1
         day = ''
         for info in infos:
-            prevmark = mark
-            # Start mark id from the top to avoid hitting any ids in the XML,
-            # which are used as marks for blobs.
-            mark = mark - 1 if mark is not None else sys.maxsize
+            commit_num += 1
 
             # Update progress indicator.
             if day != info['day']:
@@ -671,7 +698,7 @@ class Committer:
                 create_path(namespace, page['text'], self.meta['options'].DEEPNESS))
             msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (
                     info['page'], info['rev'], ' (minor)' if info['minor'] else '')
-            fromline = 'from :%d\n' % prevmark if prevmark is not None else ''
+            fromline = 'from :%d\n' % commit_mark(commit_num-1) if commit_num > 0 else ''
 
             if info['isip']:
                 author = info['user']
@@ -697,12 +724,12 @@ class Committer:
             # Write out the commit.
             out(
                 'commit refs/heads/master\n' +
-                'mark :%d\n' % mark +
+                'mark :%d\n' % commit_mark(commit_num) +
                 'author %s <%s> %d +0000\n' % (author, email, info['epoch']) +
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
                 'data %d\n%s\n' % (len(bytes(msg, ENCODING)), msg) +
                 fromline +
-                'M 100644 :%d %s\n' % (info['rev'], filename)
+                'M 100644 :%d %s\n' % (revision_mark(info['rev']), filename)
             )
 
 
