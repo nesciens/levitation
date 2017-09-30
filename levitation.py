@@ -758,20 +758,20 @@ class LevitationImport:
                 default=False)
 
         parser.add_option("-M", "--metafile", dest="METAFILE", metavar="META",
-                help="File for storing meta information (17 bytes/rev) (default: .import-meta)",
-                default=".import-meta")
+                help="File for storing meta information (17 bytes/rev) (default: import-meta)",
+                default="import-meta")
 
         parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="COMM",
-                help="File for storing comment information (257 bytes/rev) (default: .import-comm)",
-                default=".import-comm")
+                help="File for storing comment information (257 bytes/rev) (default: import-comm)",
+                default="import-comm")
 
         parser.add_option("-U", "--userfile", dest="USERFILE", metavar="USER",
-                help="File for storing author information (257 bytes/author) (default: .import-user)",
-                default=".import-user")
+                help="File for storing author information (257 bytes/author) (default: import-user)",
+                default="import-user")
 
         parser.add_option("-P", "--pagefile", dest="PAGEFILE", metavar="PAGE",
-                help="File for storing page information (257 bytes/page) (default: .import-page)",
-                default=".import-page")
+                help="File for storing page information (257 bytes/page) (default: import-page)",
+                default="import-page")
 
         parser.add_option("--no-lxml", dest="NOLXML",
                 help="Do not use the lxml parser, even if it is available", action="store_true",
