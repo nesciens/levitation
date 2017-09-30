@@ -753,7 +753,14 @@ class LevitationImport:
 
         if options.OVERWRITE:
             # clear the info files
-            for each in ['meta.pkl', options.METAFILE, options.COMMFILE, options.USERFILE, options.PAGEFILE]:
+            files = [
+                options.PKLFILE,
+                options.METAFILE,
+                options.COMMFILE,
+                options.USERFILE,
+                options.PAGEFILE,
+            ]
+            for each in files:
                 with open(each, 'wb+') as f:
                     f.truncate(0)
 
@@ -766,7 +773,7 @@ class LevitationImport:
             }
 
         try:
-            with open('meta.pkl', 'rb') as f:
+            with open(options.PKLFILE, 'rb') as f:
                 idtons = pickle.load(f)
             meta['meta'].idtons = idtons
             meta['meta'].nstoid = dict( (v,k) for k,v in idtons.items() )
@@ -776,7 +783,7 @@ class LevitationImport:
         if options.ONLYBLOB:
             progress('Step 1: Creating blobs.')
             BlobWriter(meta).parse(parser)
-            with open('meta.pkl', 'wb') as f:
+            with open(options.PKLFILE, 'wb') as f:
                 pickle.dump(meta['meta'].idtons, f)
         else:
             progress('Step 2: Writing commits.')
@@ -817,12 +824,16 @@ class LevitationImport:
                 help="When set, the commit time will be set to the revision creation, not the current system time", action="store_true",
                 default=False)
 
+        parser.add_option("--pklfile", dest="PKLFILE", metavar="FILE",
+                help="File for storing global meta information (default: import-pkl)",
+                default="import-pkl")
+
         parser.add_option("-M", "--metafile", dest="METAFILE", metavar="FILE",
-                help="File for storing meta information (17 bytes/rev) (default: import-meta)",
+                help="File for storing revision meta information (17 bytes/rev) (default: import-meta)",
                 default="import-meta")
 
         parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="FILE",
-                help="File for storing comment information (257 bytes/rev) (default: import-comm)",
+                help="File for storing revision comment information (257 bytes/rev) (default: import-comm)",
                 default="import-comm")
 
         parser.add_option("-U", "--userfile", dest="USERFILE", metavar="FILE",
