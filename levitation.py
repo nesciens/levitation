@@ -97,7 +97,7 @@ def commit_mark(commit_number):
     return get_mark(1, commit_number)
 
 
-class Meta:
+class MetaStore:
     def __init__(self, file):
         # L: The revision id
         # L: The datetime
@@ -107,10 +107,6 @@ class Meta:
         self.struct = struct.Struct('=LLLQQB')
 
         self.fh = open_file(file)
-
-        self.domain = 'unknown.invalid'
-        self.nstoid = self.idtons = {}
-        self.maxrev = -1
 
     def write(self, rev, time, page, author, minor):
         flags = 0
@@ -131,8 +127,6 @@ class Meta:
             author.id & MAX_INT64,
             flags
             )
-
-        self.maxrev = max(self.maxrev, rev)
 
         self.fh.seek(rev * self.struct.size, os.SEEK_SET)
         self.fh.write(data)
@@ -306,11 +300,11 @@ class Page:
         self.fulltitle = title
         split = self.fulltitle.split(':', 1)
 
-        if len(split) > 1 and (split[0] in self.meta['meta'].nstoid):
-            self.nsid = self.meta['meta'].nstoid[split[0]]
+        if len(split) > 1 and (split[0] in self.meta['nstoid']):
+            self.nsid = self.meta['nstoid'][split[0]]
             self.title = split[1]
         else:
-            self.nsid = self.meta['meta'].nstoid['']
+            self.nsid = self.meta['nstoid']['']
             self.title = self.fulltitle
 
     def setID(self, id):
@@ -577,13 +571,13 @@ class BlobWriter:
         )
 
     def process_captured_base(self, node):
-        self.meta['meta'].domain = urllib.parse.urlparse(singletext(node)).hostname
+        self.meta['domain'] = urllib.parse.urlparse(singletext(node)).hostname
 
     def process_captured_namespace(self, node):
         key = int(node.getAttribute('key'))
         name = singletext(node)
-        self.meta['meta'].idtons[key] = name
-        self.meta['meta'].nstoid[name] = key
+        self.meta['idtons'][key] = name
+        self.meta['nstoid'][name] = key
 
     def start_page(self, tag, attrs):
         if self.page:
@@ -693,7 +687,7 @@ class Committer:
             # Calculate all the data needed for the blob.
             page = self.meta['page'].read(info['page'])
             comm = self.meta['comm'].read(info['rev'])
-            namespace = '%d-%s' % (page['flags'], self.meta['meta'].idtons[page['flags']])
+            namespace = '%d-%s' % (page['flags'], self.meta['idtons'][page['flags']])
             filename = os.path.normpath(
                 create_path(namespace, page['text'], self.meta['options'].DEEPNESS))
             msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (
@@ -712,7 +706,7 @@ class Committer:
             if self.meta['options'].AUTHOR_DOMAIN:
               email = authoruid + '@' + self.meta['options'].AUTHOR_DOMAIN
             else:
-              email = authoruid + '@git.' + self.meta['meta'].domain
+              email = authoruid + '@git.' + self.meta['domain']
 
             if self.meta['options'].WIKITIME:
                 committime = info['epoch']
@@ -766,17 +760,20 @@ class LevitationImport:
 
         meta = {
             'options': options,
-            'meta': Meta(options.METAFILE),
+            'meta': MetaStore(options.METAFILE),
             'comm': StringStore(options.COMMFILE),
             'user': StringStore(options.USERFILE),
             'page': StringStore(options.PAGEFILE),
+            'domain': 'unknown.invalid',
+            'nstoid': {},
+            'idtons': {},
             }
+        pkl_keys = ['domain', 'nstoid', 'idtons']
 
         try:
             with open(options.PKLFILE, 'rb') as f:
-                idtons = pickle.load(f)
-            meta['meta'].idtons = idtons
-            meta['meta'].nstoid = dict( (v,k) for k,v in idtons.items() )
+                data = pickle.load(f)
+            meta.update((k, data[k]) for k in pkl_keys if k in data)
         except (FileNotFoundError, EOFError):
             pass
 
@@ -784,7 +781,7 @@ class LevitationImport:
             progress('Step 1: Creating blobs.')
             BlobWriter(meta).parse(parser)
             with open(options.PKLFILE, 'wb') as f:
-                pickle.dump(meta['meta'].idtons, f)
+                pickle.dump({k: meta[k] for k in pkl_keys}, f)
         else:
             progress('Step 2: Writing commits.')
             Committer(meta).work()
