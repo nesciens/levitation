@@ -657,31 +657,56 @@ def sanitize(s):
     return s.replace('/', '\x1c')
 
 
-def create_path(namespace, title, deepness, extension):
+def create_path(ns, title, upload, meta):
     """Generate the path according to options.
 
-    The path is [the-namespace]/74/68/65/[the-page-title][the-extension], where
-    the hexadecimal numbers in the middle are hexadecimal for the page title's
-    first few characters.
+    If meta['options'].DIRSTRCUT is 'levitation', then the path is
+    [namespace-num]-[namespace-name]/74/68/65/[title][extension], where
+    the hexadecimal numbers in the middle are hexadecimal for the title's
+    first few characters. The number of hexadecimal numbers is
+    meta['options'].DEEPNESS. The namespace name and title are sanitized
+    using function sanitize. The extension is .mediawiki for pages and empty for
+    uploads.
+
+    If meta['options].DIRSTRUCT is 'github', then the path is the following:
+    * for pages in namespace 0 (main): [title].mediawiki
+    * for pages in namespace 6 (File): :[namespace-name]:[title].mediawiki
+    * for all other pages: [namespace-name]:[title].mediawiki
+    * for uploads: [namespace-name]:[title]
+    All slashes and spaces are replaced with dashes.
 
     Args:
-       namespace: string, unsanitized namespace name.
-       title: string, unsanitized page title.
-       extension: string, text to append after the page title. Needs to include
-           a dot to show up as a genuine extension.
-       deepness: int, non-negative number of hexadecimal numbers to use.
+        ns: int, the namespace id.
+        title: string, the page title.
+        upload: bool, if true, this is a path for an upload. Otherwise this is a
+           path for a page.
+        meta: dict, the meta dict.
 
     Returns:
-       string, the path, already sanitized.
+       string, the path.
     """
-    path = sanitize(namespace)
-    for c in title[:deepness]:
-        path = os.path.join(
-            path,
-            codecs.encode(bytes(c, ENCODING), 'hex').decode(ENCODING))
-    path = os.path.join(path, sanitize(title) + extension)
-    return path
-
+    if meta['options'].DIRSTRUCT == 'levitation':
+        path = sanitize('%d-%s' % (ns, meta['idtons'][ns]))
+        for c in title[:meta['options'].DEEPNESS]:
+            path = os.path.join(
+                path,
+                codecs.encode(bytes(c, ENCODING), 'hex').decode(ENCODING))
+        extension = '' if upload else 'mediawiki'
+        path = os.path.join(path, sanitize(title) + sanitize(extension))
+        return os.path.normpath(path)
+    elif meta['options'].DIRSTRUCT == 'github':
+        if upload:
+            path = "%s:%s" % (meta['idtons'][ns], title)
+        elif ns == 0:
+            path = "%s.mediawiki" % title
+        elif ns == 6:
+            path = ":%s:%s.mediawiki" % (meta['idtons'][ns], title)
+        else:
+            path = "%s:%s.mediawiki" % (meta['idtons'][ns], title)
+        path = path.replace('/', '-').replace(' ', '-')
+        return os.path.normpath(path)
+    else:
+        raise ValueError("Unknown directory structure style %s." % meta['options'].DIRSTRUCT)
 
 class Committer:
     def __init__(self, meta):
@@ -727,21 +752,13 @@ class Committer:
 
             # Calculate all the data needed for the commit.
             page = self.meta['page'].read(info['page'])
-            namespace = '%d-%s' % (page['flags'], self.meta['idtons'][page['flags']])
+            filename = create_path(page['flags'], page['text'], info['upload'], self.meta)
             if info['upload']:
-                filename = os.path.normpath(create_path(
-                    namespace, page['text'],
-                    deepness=self.meta['options'].DEEPNESS,
-                    extension=''))
                 comm = self.meta['upco'].read(info['rev'])
                 msg = '%s\n\nLevitation import of an upload for page %d' % (
                     comm['text'], info['page'])
                 blob_mark = upload_mark(info['rev'])
             else:
-                filename = os.path.normpath(create_path(
-                    namespace, page['text'],
-                    deepness=self.meta['options'].DEEPNESS,
-                    extension='.mediawiki'))
                 comm = self.meta['comm'].read(info['rev'])
                 msg = '%s\n\nLevitation import of page %d rev %d%s.\n' % (
                     comm['text'], info['page'], info['rev'],
@@ -863,10 +880,6 @@ class LevitationImport:
                 help="Specify the maximum pages to import, -1 for all (default: 100)",
                 default=100, type="int")
 
-        parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="INT",
-                help="Specify the deepness of the result directory structure (default: 3)",
-                default=3, type="int")
-
         parser.add_option("-a", "--author-domain", dest="AUTHOR_DOMAIN", metavar="DOMAIN",
                 help="Domain for synthesizing author 'e-mail' addresses, by default git.[domain name from dump] is used (default: \"\")",
                 default="")
@@ -922,6 +935,14 @@ class LevitationImport:
         parser.add_option("--overwrite", dest="OVERWRITE",
                 help="Overwrite information files", action="store_true",
                 default=False)
+
+        parser.add_option("--directory-structure", dest="DIRSTRUCT",
+                help="How to name files in the result git repository.",
+                choices=["levitation", "github"], default="levitation")
+
+        parser.add_option("-d", "--deepness", dest="DEEPNESS", metavar="INT",
+                help="Specify the deepness of the result directory structure (default: 3)",
+                default=3, type="int")
 
         (options, args) = parser.parse_args(args)
         return (options, args)
