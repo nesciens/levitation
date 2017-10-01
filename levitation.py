@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import xml.dom.minidom
+import base64
 from calendar import timegm
 import datetime
 import os
@@ -49,8 +50,12 @@ def singletext(node):
     return res
 
 
+def bytes_out(text):
+    sys.stdout.buffer.write(text)
+
+
 def out(text):
-    sys.stdout.write(text)
+    bytes_out(bytes(text, ENCODING))
 
 
 def progress(text):
@@ -86,7 +91,7 @@ def get_mark(ns, num):
     Returns:
       A positive integer.
     """
-    return 1 + ns + 2*num
+    return 1 + ns + 3*num
 
 
 def revision_mark(revision_id):
@@ -95,6 +100,10 @@ def revision_mark(revision_id):
 
 def commit_mark(commit_number):
     return get_mark(1, commit_number)
+
+
+def upload_mark(upload_number):
+    return get_mark(2, upload_number)
 
 
 class MetaStore:
@@ -108,7 +117,7 @@ class MetaStore:
 
         self.fh = open_file(file)
 
-    def write(self, rev, time, page, author, minor):
+    def write(self, rev, time, page, author, minor, upload):
         flags = 0
         if minor:
             flags += 1
@@ -118,6 +127,9 @@ class MetaStore:
 
         if author.isdel:
             flags += 4
+
+        if upload:
+            flags += 8
 
         data = self.struct.pack(
             rev,
@@ -150,6 +162,7 @@ class MetaStore:
             'minor':  False,
             'isip':   False,
             'isdel':  False,
+            'upload': False,
             }
 
         if d['rev'] != 0:
@@ -169,6 +182,9 @@ class MetaStore:
 
         if flags & 4:
             d['isdel'] = True
+
+        if flags & 8:
+            d['upload'] = True
 
         return d
 
@@ -254,13 +270,19 @@ class User:
 
 
 class Revision:
-    def __init__(self, node, page, meta):
-        self.id = 0
+    def __init__(self, node, page, meta, upload=False):
         self.minor = False
-        self.timestamp = self.text = self.comment = self.user = None
+        self.timestamp = self.contents = self.comment = self.user = None
         self.page = page
         self.meta = meta
         self.dom = node
+        self.upload = upload
+
+        if self.upload:
+            self.id = self.meta['max_upload'] + 1
+            self.meta['max_upload'] = self.id
+        else:
+            self.id = 0
 
         for lv1 in self.dom.childNodes:
             if lv1.nodeType != lv1.ELEMENT_NODE:
@@ -277,16 +299,26 @@ class Revision:
             elif lv1.tagName == 'comment':
                 self.comment = singletext(lv1)
             elif lv1.tagName == 'text':
-                self.text = singletext(lv1)
+                self.contents = bytes(singletext(lv1), ENCODING)
+            elif lv1.tagName == 'contents':
+                self.contents = base64.b64decode(singletext(lv1))
 
-        self.meta['meta'].write(self.id, self.timestamp, self.page, self.user, self.minor)
+        if self.upload:
+            store = self.meta['uplo']
+            comm = self.meta['upco']
+            mark = upload_mark(self.id)
+        else:
+            store = self.meta['meta']
+            comm = self.meta['comm']
+            mark = revision_mark(self.id)
 
+        store.write(self.id, self.timestamp, self.page, self.user, self.minor, self.upload)
         if self.comment:
-            self.meta['comm'].write(self.id, self.comment)
+            comm.write(self.id, self.comment)
 
-        out('blob\nmark :{}\ndata {}\n'.format(
-            revision_mark(self.id), len(bytes(self.text, ENCODING))))
-        out(self.text + '\n')
+        out('blob\nmark :{}\ndata {}\n'.format(mark, len(self.contents)))
+        bytes_out(self.contents)
+        out('\n')
 
 
 class Page:
@@ -315,8 +347,11 @@ class Page:
         if self.id != -1 and self.title != '':
             self.meta['page'].write(self.id, self.title, self.nsid)
 
-    def addRevision(self, dom):
-        Revision(dom, self.id, self.meta)
+    def addRevision(self, node):
+        Revision(node, self.id, self.meta)
+
+    def addUpload(self, node):
+        Revision(node, self.id, self.meta, upload=True)
 
 
 class XMLError(ValueError):
@@ -588,6 +623,7 @@ class BlobWriter:
                 title=Capture(self.process_captured_title),
                 id=Capture(self.process_captured_page_id),
                 revision=Capture(self.process_captured_revision),
+                upload=Capture(self.process_captured_upload),
             ),
             self.end_page,
             None,
@@ -613,21 +649,26 @@ class BlobWriter:
     def process_captured_revision(self, node):
         self.page.addRevision(node)
 
+    def process_captured_upload(self, node):
+        self.page.addUpload(node)
+
 
 def sanitize(s):
     return s.replace('/', '\x1c')
 
 
-def create_path(namespace, title, deepness):
+def create_path(namespace, title, deepness, extension):
     """Generate the path according to options.
 
-    The path is the-namespace/74/68/65/the-page-title, where the hexadecimal
-    numbers in the middle are hexadecimal for the page title's first few
-    characters.
+    The path is [the-namespace]/74/68/65/[the-page-title][the-extension], where
+    the hexadecimal numbers in the middle are hexadecimal for the page title's
+    first few characters.
 
     Args:
        namespace: string, unsanitized namespace name.
        title: string, unsanitized page title.
+       extension: string, text to append after the page title. Needs to include
+           a dot to show up as a genuine extension.
        deepness: int, non-negative number of hexadecimal numbers to use.
 
     Returns:
@@ -638,7 +679,7 @@ def create_path(namespace, title, deepness):
         path = os.path.join(
             path,
             codecs.encode(bytes(c, ENCODING), 'hex').decode(ENCODING))
-    path = os.path.join(path, sanitize(title) + '.mediawiki')
+    path = os.path.join(path, sanitize(title) + extension)
     return path
 
 
@@ -650,28 +691,28 @@ class Committer:
                 'commit (but not author) times will most likely be wrong' % tzoffsetorzero())
 
     def work(self):
-        if self.meta['options'].SORT:
-            # TODO: Avoid reading all infos into memory, sort them on disk
-            # instead.
-            progress("Reading in all basic revision information. If this uses too much memory, try without --sort.")
-            infos = []
+        def gen():
+            """Generator for revision information."""
             for index in itertools.count(start=0, step=1):
                 info = self.meta['meta'].read(index)
                 if not info:
                     break
                 if info['exists']:
-                    infos.append(info)
+                    yield info
+            for index in itertools.count(start=0, step=1):
+                info = self.meta['uplo'].read(index)
+                if not info:
+                    break
+                if info['exists']:
+                    yield info
+        if self.meta['options'].SORT:
+            # TODO: Avoid reading all infos into memory, sort them on disk
+            # instead.
+            progress("Reading in all basic revision information. If this uses too much memory, try without --sort.")
+            infos = [info for info in gen()]
             progress("Sorting basic revision information by time. If this takes too long, try without --sort.")
             infos.sort(key=lambda x: x['epoch'])
         else:
-            def gen():
-                """Generator for revision information."""
-                for index in itertools.count(start=0, step=1):
-                    info = self.meta['meta'].read(index)
-                    if not info:
-                        break
-                    if info['exists']:
-                        yield info
             infos = gen()
 
         commit_num = -1
@@ -684,15 +725,28 @@ class Committer:
                 day = info['day']
                 progress('   ' + day)
 
-            # Calculate all the data needed for the blob.
+            # Calculate all the data needed for the commit.
             page = self.meta['page'].read(info['page'])
-            comm = self.meta['comm'].read(info['rev'])
             namespace = '%d-%s' % (page['flags'], self.meta['idtons'][page['flags']])
-            filename = os.path.normpath(
-                create_path(namespace, page['text'], self.meta['options'].DEEPNESS))
-            msg = comm['text'] + '\n\nLevitation import of page %d rev %d%s.\n' % (
-                    info['page'], info['rev'], ' (minor)' if info['minor'] else '')
-            fromline = 'from :%d\n' % commit_mark(commit_num-1) if commit_num > 0 else ''
+            if info['upload']:
+                filename = os.path.normpath(create_path(
+                    namespace, page['text'],
+                    deepness=self.meta['options'].DEEPNESS,
+                    extension=''))
+                comm = self.meta['upco'].read(info['rev'])
+                msg = '%s\n\nLevitation import of an upload for page %d' % (
+                    comm['text'], info['page'])
+                blob_mark = upload_mark(info['rev'])
+            else:
+                filename = os.path.normpath(create_path(
+                    namespace, page['text'],
+                    deepness=self.meta['options'].DEEPNESS,
+                    extension='.mediawiki'))
+                comm = self.meta['comm'].read(info['rev'])
+                msg = '%s\n\nLevitation import of page %d rev %d%s.\n' % (
+                    comm['text'], info['page'], info['rev'],
+                    ' (minor)' if info['minor'] else '')
+                blob_mark = revision_mark(info['rev'])
 
             if info['isip']:
                 author = info['user']
@@ -716,6 +770,7 @@ class Committer:
                 offset = tzoffsetorzero()
 
             # Write out the commit.
+            fromline = 'from :%d\n' % commit_mark(commit_num-1) if commit_num > 0 else ''
             out(
                 'commit refs/heads/master\n' +
                 'mark :%d\n' % commit_mark(commit_num) +
@@ -723,7 +778,7 @@ class Committer:
                 'committer %s %d %s\n' % (self.meta['options'].COMMITTER, committime, offset) +
                 'data %d\n%s\n' % (len(bytes(msg, ENCODING)), msg) +
                 fromline +
-                'M 100644 :%d %s\n' % (revision_mark(info['rev']), filename)
+                'M 100644 :%d %s\n' % (blob_mark, filename)
             )
 
 
@@ -751,6 +806,8 @@ class LevitationImport:
                 options.PKLFILE,
                 options.METAFILE,
                 options.COMMFILE,
+                options.UPLOFILE,
+                options.UPCOFILE,
                 options.USERFILE,
                 options.PAGEFILE,
             ]
@@ -762,13 +819,16 @@ class LevitationImport:
             'options': options,
             'meta': MetaStore(options.METAFILE),
             'comm': StringStore(options.COMMFILE),
+            'uplo': MetaStore(options.UPLOFILE),
+            'upco': StringStore(options.UPCOFILE),
             'user': StringStore(options.USERFILE),
             'page': StringStore(options.PAGEFILE),
             'domain': 'unknown.invalid',
             'nstoid': {},
             'idtons': {},
+            'max_upload': 0,
             }
-        pkl_keys = ['domain', 'nstoid', 'idtons']
+        pkl_keys = ['domain', 'nstoid', 'idtons', 'max_upload']
 
         try:
             with open(options.PKLFILE, 'rb') as f:
@@ -789,6 +849,8 @@ class LevitationImport:
 
         meta['meta'].fh.close()
         meta['comm'].fh.close()
+        meta['uplo'].fh.close()
+        meta['upco'].fh.close()
         meta['user'].fh.close()
         meta['page'].fh.close()
 
@@ -832,6 +894,14 @@ class LevitationImport:
         parser.add_option("-C", "--commfile", dest="COMMFILE", metavar="FILE",
                 help="File for storing revision comment information (257 bytes/rev) (default: import-comm)",
                 default="import-comm")
+
+        parser.add_option("--uplofile", dest="UPLOFILE", metavar="FILE",
+                help="File for storing upload meta information (17 bytes/upload) (default: import-uplo)",
+                default="import-uplo")
+
+        parser.add_option("--upcofile", dest="UPCOFILE", metavar="FILE",
+                help="File for storing upload comment information (257 bytes/rev) (default: import-upco)",
+                default="import-upco")
 
         parser.add_option("-U", "--userfile", dest="USERFILE", metavar="FILE",
                 help="File for storing author information (257 bytes/author) (default: import-user)",
